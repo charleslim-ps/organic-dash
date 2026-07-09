@@ -15,6 +15,11 @@
  * Data: zone partnerstack.com, dataset httpRequestsAdaptiveGroups,
  * verifiedBotCategory in [AI Crawler, AI Assistant, AI Search],
  * requestSource eyeball, grouped by date + userAgent + category.
+ * Host-filtered to the marketing site (HOST below) — zone-wide numbers are
+ * dominated by js.partnerstack.com (tracking assets) and product/partner-page
+ * subdomains (dash., api., <partner>.partnerstack.com), which aren't content
+ * crawl demand. Charles's call 2026-07-09: apex hostname only
+ * (www.partnerstack.com is just a redirect, ~9% of apex volume — excluded).
  * Cloudflare caps queries at 32 days and retention at ~90 days, so the
  * pull runs in 30-day chunks from (today - RETENTION_DAYS) to yesterday.
  */
@@ -26,6 +31,7 @@ const path = require('path');
 const MCP_URL = 'https://graphql.mcp.cloudflare.com/mcp';
 const ACCOUNT_ID = 'e01cc42974eee44a8e992b8e7df25a19'; // PartnerStack
 const ZONE_TAG = 'ea63cacb9a9d5c3728d3f9f5a007f437'; // partnerstack.com
+const HOST = 'partnerstack.com'; // marketing site only, no subdomains
 const RETENTION_DAYS = 88; // Cloudflare allows 12w6d (~90); stay under it
 const CHUNK_DAYS = 30; // max span per query is 4w4d (32)
 
@@ -94,6 +100,7 @@ function crawlQuery(from, to) {
   return `query { viewer { zones(filter: {zoneTag: "${ZONE_TAG}"}) {
     httpRequestsAdaptiveGroups(
       filter: {date_geq: "${from}", date_leq: "${to}", requestSource: "eyeball",
+               clientRequestHTTPHost: "${HOST}",
                verifiedBotCategory_in: ["AI Crawler", "AI Assistant", "AI Search"]},
       limit: 5000, orderBy: [date_ASC]
     ) { count dimensions { date userAgent verifiedBotCategory } }
@@ -143,9 +150,13 @@ function crawlQuery(from, to) {
     console.log(`${from}..${to}: ${groups.length} rows`);
   }
 
+  // The apex host only started routing through this zone ~2026-05-26, so the
+  // early window can be structurally empty — report coverage from the first
+  // actual data day, not the queried start.
+  const actualStart = rows.length ? rows[0].date : start;
   const out = path.join(__dirname, 'crawl-raw.json');
-  fs.writeFileSync(out, JSON.stringify({ pulledAt: new Date().toISOString(), zone: 'partnerstack.com', start, end, rows }), 'utf8');
-  console.log(`crawl-raw.json: ${rows.length} rows, ${start}..${end}`);
+  fs.writeFileSync(out, JSON.stringify({ pulledAt: new Date().toISOString(), zone: 'partnerstack.com', host: HOST, start: actualStart, queriedStart: start, end, rows }), 'utf8');
+  console.log(`crawl-raw.json: ${rows.length} rows, ${actualStart}..${end} (queried from ${start})`);
 })().catch((e) => {
   console.error(e.message);
   process.exit(1);

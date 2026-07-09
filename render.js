@@ -268,9 +268,10 @@ const MARKUP = `
         MQLs: Looker <code>salesforce::lead</code> — <code>mql_date</code> in period, <code>lead_source = Inbound</code>,
         status excludes Holding (same definition as GTM Daily Pulse). AI attribution = regex over
         <code>sub_source</code>, <code>utm_source</code>, <code>utm_medium</code>, <code>form_name</code>.
-        Crawl: Cloudflare GraphQL <code>httpRequestsAdaptiveGroups</code> on zone <code>partnerstack.com</code>,
-        verified bot categories <code>AI Crawler / AI Assistant / AI Search</code> only (search-engine crawlers
-        excluded; ~90-day edge retention). Cloudflare's "AI referrals" metric is deliberately NOT used for the
+        Crawl: Cloudflare GraphQL <code>httpRequestsAdaptiveGroups</code>, hostname <code>partnerstack.com</code>
+        only (marketing site; excludes js/dash/api and partner-page subdomains), verified bot categories
+        <code>AI Crawler / AI Assistant / AI Search</code> only (search-engine crawlers excluded;
+        ~90-day edge retention). Cloudflare's "AI referrals" metric is deliberately NOT used for the
         referral funnel above — it counts Google Search among referrers; visits stay GA4-only.
         Data pulled via Claude MCP connectors; no direct API credentials.</p>
       </div>
@@ -504,7 +505,7 @@ const SCRIPT = `
     }).join('');
     document.getElementById('crawl-note').textContent = clamped
       ? 'Cloudflare edge retention is ~90 days: crawl data covers ' + D.crawlStart + ' \\u2192 ' + D.crawlEnd + '; longer windows are clamped.'
-      : 'Source: Cloudflare zone partnerstack.com \\u00b7 verified AI bots only (AI Crawler / AI Assistant / AI Search).';
+      : 'Source: Cloudflare, host partnerstack.com only (marketing site \\u2014 no product/asset subdomains) \\u00b7 verified AI bots (AI Crawler / AI Assistant / AI Search).';
 
     // --- crawler table (top 14 + rollup)
     var list = Object.keys(crawlerAgg).map(function (k) { return [k, crawlerAgg[k]]; }).sort(function (a, b) { return b[1].n - a[1].n; });

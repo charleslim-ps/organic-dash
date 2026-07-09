@@ -49,7 +49,11 @@ scratch JSON file yourself (raw `[...]` rows or the whole `{result: [...]}` obje
    - Comes back inline — Write it to a scratch file.
 
 4b. **Cloudflare AI crawl data:** run `node crawl-pull.js` (in this directory)
-   → writes `crawl-raw.json` (~90 days of AI-bot requests on partnerstack.com).
+   → writes `crawl-raw.json` (~90 days of AI-bot requests on hostname
+   `partnerstack.com` ONLY — Charles's call: no subdomains; zone-wide numbers
+   are dominated by js.partnerstack.com assets + dash/api/partner pages).
+   The apex host only started routing through the zone ~2026-05-26, so
+   coverage starts there; the script reports the first actual data day.
    - Auth: reuses the `cloudflare-graphql` MCP OAuth token from
      `.credentials.json` in `$CLAUDE_CONFIG_DIR` / `~\.claude` / `~\.claude-ps`
      (tries an OAuth refresh grant if expired). If it fails, re-authorize via
@@ -90,8 +94,10 @@ scratch JSON file yourself (raw `[...]` rows or the whole `{result: [...]}` obje
   (matches GTM Daily Pulse).
 - **AI-attributed MQL** = regex match over `sub_source | utm_source | utm_medium | form_name`.
 - **AI Crawl Control section** = Cloudflare GraphQL `httpRequestsAdaptiveGroups`,
-  zone `partnerstack.com`, verified bot categories `AI Crawler / AI Assistant / AI Search`
-  only (search-engine crawlers excluded), `requestSource = eyeball`. UA → crawler/operator
+  hostname `partnerstack.com` only (`clientRequestHTTPHost`; marketing site — excludes
+  js/dash/api/partner-page subdomains and the www redirect), verified bot categories
+  `AI Crawler / AI Assistant / AI Search` only (search-engine crawlers excluded),
+  `requestSource = eyeball`. UA → crawler/operator
   mapping lives in `CRAWLER_MAP` in `make-data.js`; generic UAs Cloudflare verified by
   other signals roll up to "Other verified AI bots". Edge retention is ~90 days, so the
   section clamps 12m views and the crawl→visit→MQL funnel always uses the intersection
