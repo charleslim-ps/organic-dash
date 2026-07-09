@@ -1,0 +1,45 @@
+name: Refresh dashboard
+
+on:
+  schedule:
+    # Mondays 14:00 UTC
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build index.html
+        run: node build.js
+        env:
+          LOOKER_CLIENT_ID: ${{ secrets.LOOKER_CLIENT_ID }}
+          LOOKER_CLIENT_SECRET: ${{ secrets.LOOKER_CLIENT_SECRET }}
+          HUBSPOT_API_TOKEN: ${{ secrets.HUBSPOT_API_TOKEN }}
+          LOOKER_LOOK_ID: ${{ secrets.LOOKER_LOOK_ID }}
+          LOOKER_BASE_URL: ${{ vars.LOOKER_BASE_URL }}
+          PERIOD_DAYS: ${{ vars.PERIOD_DAYS }}
+          ZAPIER_WEBHOOK_URL: ${{ secrets.ZAPIER_WEBHOOK_URL }}
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --staged --quiet; then
+            echo "No changes to index.html"
+            exit 0
+          fi
+          git commit -m "chore: refresh dashboard data [skip ci]"
+          git push
