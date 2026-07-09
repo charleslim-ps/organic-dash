@@ -121,35 +121,40 @@ function addDays(iso, delta) {
 }
 
 // Design system lifted from https://ad-vibe-coding.github.io/organic-dash/ —
-// warm stone neutrals, periwinkle accent, Inter, rounded-2xl bordered cards,
-// uppercase eyebrow labels, mono tabular numerals.
+// stone neutrals, periwinkle accent, Inter, rounded-2xl bordered cards,
+// uppercase eyebrow labels, mono tabular numerals. Deliberately single-theme
+// dark (#0f0f0e) so the page reads the same on any host background.
+// Mobile-first: base styles are the small-screen layout; min-width queries
+// scale up.
 const STYLE = `
-    .od-wrap { max-width: 1200px; margin: 0 auto; font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 0.875rem; line-height: 1.5; color: var(--od-text); }
-    .od-wrap { --od-text: #1a1a18; --od-muted: #5a5852; --od-faint: #8b8a85; --od-surface: #ffffff; --od-surface2: #f2efe8; --od-border: #e5e3dd; --od-accent: #7b82e8; --od-green: #059669; }
-    @media (prefers-color-scheme: dark) {
-      .od-wrap { --od-text: #f5f4f0; --od-muted: #a09f9a; --od-faint: #6b6a65; --od-surface: #1a1a19; --od-surface2: #232321; --od-border: #2a2a28; --od-accent: #7b82e8; --od-green: #34d399; }
-    }
-    :root[data-theme="dark"] .od-wrap { --od-text: #f5f4f0; --od-muted: #a09f9a; --od-faint: #6b6a65; --od-surface: #1a1a19; --od-surface2: #232321; --od-border: #2a2a28; --od-accent: #7b82e8; --od-green: #34d399; }
-    :root[data-theme="light"] .od-wrap { --od-text: #1a1a18; --od-muted: #5a5852; --od-faint: #8b8a85; --od-surface: #ffffff; --od-surface2: #f2efe8; --od-border: #e5e3dd; --od-accent: #7b82e8; --od-green: #059669; }
+    body { background: #0f0f0e !important; }
+    .od-page { background: #0f0f0e; padding: 40px; margin: 0 auto; }
+    .od-wrap { position: relative; max-width: 1200px; margin: 0 auto; font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 0.875rem; line-height: 1.5; color: var(--od-text); color-scheme: dark; }
+    .od-wrap { --od-text: #f5f4f0; --od-muted: #a09f9a; --od-faint: #6b6a65; --od-surface: #1a1a19; --od-surface2: #232321; --od-border: #2a2a28; --od-accent: #7b82e8; --od-green: #34d399; }
     .od-wrap .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-    .od-wrap .head { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; justify-content: space-between; margin-bottom: 1.5rem; }
-    .od-wrap h1 { font-size: 1.875rem; font-weight: 600; letter-spacing: -0.025em; margin: 0; }
-    .od-wrap .sub { color: var(--od-muted); margin: 0.35rem 0 0; font-size: 0.875rem; }
+    .od-wrap .head { display: flex; flex-direction: column; gap: 1rem; align-items: flex-start; margin-bottom: 1.5rem; }
+    @media (min-width: 800px) { .od-wrap .head { flex-direction: row; align-items: flex-end; justify-content: space-between; } }
+    .od-wrap h1 { font-size: 3rem; font-weight: 600; letter-spacing: -0.07em; margin: 0; text-wrap: balance; }
+    @media (min-width: 640px) { .od-wrap h1 { font-size: 72px; } }
+    .od-wrap .sub { color: var(--od-muted); margin: 0.5rem 0 0; font-size: 0.875rem; }
     .od-wrap .filters { display: flex; flex-wrap: wrap; gap: 8px; }
     .od-wrap .filters button { font: inherit; font-size: 0.75rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; padding: 0.5rem 1rem; border-radius: 999px; border: 1px solid var(--od-border); background: var(--od-surface); color: var(--od-muted); cursor: pointer; transition: background-color 0.15s, color 0.15s; }
     .od-wrap .filters button:hover { background: var(--od-surface2); color: var(--od-text); }
     .od-wrap .filters button:focus-visible { outline: 2px solid var(--od-accent); outline-offset: 2px; }
     .od-wrap .filters button[aria-pressed="true"] { background: var(--od-accent); border-color: var(--od-accent); color: #fff; }
-    .od-wrap .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+    .od-wrap .kpis { display: grid; grid-template-columns: 1fr; gap: 0.75rem; margin-bottom: 1.5rem; }
+    @media (min-width: 480px) { .od-wrap .kpis { grid-template-columns: repeat(2, 1fr); } }
+    @media (min-width: 1024px) { .od-wrap .kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); } }
     .od-wrap .kpi { background: var(--od-surface); border: 1px solid var(--od-border); border-radius: 1rem; padding: 1.25rem 1.5rem; }
     .od-wrap .kpi .label { color: var(--od-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
     .od-wrap .kpi .value { font-size: 2.25rem; font-weight: 600; letter-spacing: -0.025em; margin-top: 0.6rem; font-variant-numeric: tabular-nums; }
     .od-wrap .kpi .value.green { color: var(--od-green); }
     .od-wrap .card { background: var(--od-surface); border: 1px solid var(--od-border); border-radius: 1rem; padding: 1.5rem; margin-bottom: 1.5rem; }
     .od-wrap .card h2 { font-size: 0.75rem; margin: 0 0 1.25rem; color: var(--od-muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; }
-    .od-wrap .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-    @media (max-width: 800px) { .od-wrap .grid2 { grid-template-columns: 1fr; } }
-    .od-wrap .chart { position: relative; height: 260px; }
+    .od-wrap .grid2 { display: grid; grid-template-columns: 1fr; gap: 1.5rem; }
+    @media (min-width: 800px) { .od-wrap .grid2 { grid-template-columns: 1fr 1fr; } }
+    .od-wrap .chart { position: relative; height: 220px; }
+    @media (min-width: 640px) { .od-wrap .chart { height: 260px; } }
     .od-wrap .gridline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--od-border); }
     .od-wrap .gridline span { position: absolute; right: 0; top: -1.1rem; font-size: 0.7rem; color: var(--od-faint); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
     .od-wrap .bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; }
@@ -182,6 +187,7 @@ const STYLE = `
 `;
 
 const MARKUP = `
+  <div class="od-page">
   <div class="od-wrap">
     <div class="head">
       <div>
@@ -238,6 +244,7 @@ const MARKUP = `
 
     <footer id="od-footer"></footer>
     <div class="tip" id="tip"></div>
+  </div>
   </div>
 `;
 
@@ -425,8 +432,7 @@ function main() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Organic Dash — LLM Referral → MQL</title>
   <style>
-    body { margin: 0; padding: 2rem 1.25rem 4rem; background: #faf8f4; }
-    @media (prefers-color-scheme: dark) { body { background: #0f0f0e; } }
+    body { margin: 0; }
     ${STYLE}
   </style>
 </head>
