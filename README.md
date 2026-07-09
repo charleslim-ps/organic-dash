@@ -10,7 +10,7 @@ Static GitHub Pages dashboard showing **LLM referral traffic → MQL conversion*
 2. Pulls AI referral sessions from a saved Looker Look.
 3. Pulls MQL contacts from HubSpot and flags AI-influenced attribution.
 4. Writes a self-contained `index.html` (no npm deps).
-5. GitHub Action runs every **Monday** (or on demand), commits fresh `index.html`.
+5. GitHub Action runs **daily at 12 AM Eastern** (or on demand), commits fresh `index.html`.
 
 ## Quick start (local)
 
