@@ -135,7 +135,7 @@ const STYLE = `
     .od-wrap .head { display: flex; flex-direction: column; gap: 1rem; align-items: flex-start; margin-bottom: 1.5rem; }
     @media (min-width: 800px) { .od-wrap .head { flex-direction: row; align-items: flex-end; justify-content: space-between; } }
     .od-wrap .slug { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; color: #ffffff; margin-bottom: 0.75rem; }
-    .od-wrap h1 { font-size: 3rem; font-weight: 600; letter-spacing: -0.07em; margin: 0; text-wrap: balance; }
+    .od-wrap h1 { font-size: 3rem; font-weight: 600; letter-spacing: -0.07em; line-height: 0.92; margin: 0; text-wrap: balance; }
     @media (min-width: 640px) { .od-wrap h1 { font-size: 72px; } }
     .od-wrap .sub { color: var(--od-muted); margin: 0.5rem 0 0; font-size: 0.875rem; }
     .od-wrap .filters { display: flex; flex-wrap: wrap; gap: 8px; }
