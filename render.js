@@ -134,6 +134,7 @@ const STYLE = `
     .od-wrap .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .od-wrap .head { display: flex; flex-direction: column; gap: 1rem; align-items: flex-start; margin-bottom: 1.5rem; }
     @media (min-width: 800px) { .od-wrap .head { flex-direction: row; align-items: flex-end; justify-content: space-between; } }
+    .od-wrap .slug { font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; color: #ffffff; margin-bottom: 0.75rem; }
     .od-wrap h1 { font-size: 3rem; font-weight: 600; letter-spacing: -0.07em; margin: 0; text-wrap: balance; }
     @media (min-width: 640px) { .od-wrap h1 { font-size: 72px; } }
     .od-wrap .sub { color: var(--od-muted); margin: 0.5rem 0 0; font-size: 0.875rem; }
@@ -191,8 +192,9 @@ const MARKUP = `
   <div class="od-wrap">
     <div class="head">
       <div>
-        <h1>Organic Dash</h1>
-        <p class="sub">LLM referral traffic → MQL conversion · PartnerStack · <span id="od-period-label"></span></p>
+        <div class="slug">Organic Dash</div>
+        <h1>LLM referral traffic → MQL conversion</h1>
+        <p class="sub">PartnerStack · Last updated <span id="od-updated"></span> · <span id="od-period-label"></span></p>
       </div>
       <div class="filters" role="group" aria-label="Time period">
         <button data-p="7">7d</button>
@@ -313,8 +315,10 @@ const SCRIPT = `
     document.getElementById('k-share').textContent = inbound ? ((aiMqls.length / inbound) * 100).toFixed(1) + '%' : '—';
     document.getElementById('k-conv').textContent = aiUsers ? ((aiMqls.length / aiUsers) * 100).toFixed(2) + '%' : '—';
     document.getElementById('k-tot').textContent = fmt(totUsers);
+    document.getElementById('od-updated').textContent = new Date(D.generatedAt)
+      .toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     document.getElementById('od-period-label').textContent =
-      state.period === 'all' ? 'last 12 months (since ' + (D.tot[0] ? D.tot[0][0] : '—') + ')' : 'last ' + state.period + ' days';
+      state.period === 'all' ? 'last 12 months' : 'last ' + state.period + ' days';
 
     // --- chart (daily; weekly when the window is long)
     var days = Object.keys(aiByDay).sort();
