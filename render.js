@@ -16,8 +16,9 @@
 const fs = require('fs');
 const path = require('path');
 
-// No bare "you.com" — it substring-matches peekyou.com.
-const AI_RE = /chatgpt|openai|perplexity|claude\.ai|anthropic|gemini|copilot|phind|poe\.com|notebooklm/i;
+// No bare "you.com" — it substring-matches peekyou.com. meta.ai included
+// because HubSpot's AI Referrals bucket sees it in this portal.
+const AI_RE = /chatgpt|openai|perplexity|claude\.ai|anthropic|gemini|copilot|phind|poe\.com|notebooklm|meta\.ai/i;
 const NON_AI_DETAIL_DAYS = 90;
 
 function loadData() {
@@ -92,7 +93,13 @@ function buildPayload(data) {
   const mqlDaily = {};
   for (const m of contacts) mqlDaily[m.d] = (mqlDaily[m.d] || 0) + 1;
 
-  const allInbound = data.mqlMonthly.reduce((s, r) => s + (Number(r['lead.count']) || 0), 0);
+  // Full-window inbound denominator: exact contact count when the contact
+  // pull covers the whole trimmed window, else the monthly-counts sum
+  // (approximate at the boundary month).
+  const contactsCoverWindow = contactMin && data.trimCutoff && contactMin <= addDays(data.trimCutoff, 1);
+  const allInbound = contactsCoverWindow
+    ? contacts.length
+    : data.mqlMonthly.reduce((s, r) => s + (Number(r['lead.count']) || 0), 0);
 
   return {
     generatedAt: data.generatedAt,
@@ -103,7 +110,6 @@ function buildPayload(data) {
     allInbound,
     contactMin,
     nonAiMin,
-    mqlAllTimeMin: (data.mqlMonthly[0] || {})['lead.mql_date_month'] || '',
   };
 }
 
@@ -177,7 +183,7 @@ const MARKUP = `
         <button data-p="7">7d</button>
         <button data-p="30">30d</button>
         <button data-p="90">90d</button>
-        <button data-p="all">All time</button>
+        <button data-p="all">12m</button>
       </div>
     </div>
 
@@ -292,7 +298,7 @@ const SCRIPT = `
     document.getElementById('k-conv').textContent = aiUsers ? ((aiMqls.length / aiUsers) * 100).toFixed(2) + '%' : '—';
     document.getElementById('k-tot').textContent = fmt(totUsers);
     document.getElementById('od-period-label').textContent =
-      state.period === 'all' ? 'all time (traffic since ' + (D.tot[0] ? D.tot[0][0] : '—') + ', MQLs since ' + D.mqlAllTimeMin + ')' : 'last ' + state.period + ' days';
+      state.period === 'all' ? 'last 12 months (since ' + (D.tot[0] ? D.tot[0][0] : '—') + ')' : 'last ' + state.period + ' days';
 
     // --- chart (daily; weekly when the window is long)
     var days = Object.keys(aiByDay).sort();
@@ -331,7 +337,7 @@ const SCRIPT = `
 
     // --- referrers
     var refs = Object.keys(refTotals).map(function (k) { return [k, refTotals[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
-    document.getElementById('ref-title').textContent = 'AI referrers (' + (state.period === 'all' ? 'all time' : 'last ' + state.period + 'd') + ')';
+    document.getElementById('ref-title').textContent = 'AI referrers (' + (state.period === 'all' ? '12m' : 'last ' + state.period + 'd') + ')';
     document.getElementById('ref-body').innerHTML = refs.map(function (r) {
       return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + fmt(r[1]) + '</td></tr>';
     }).join('') || '<tr><td colspan="2">none</td></tr>';
@@ -350,8 +356,7 @@ const SCRIPT = `
     var btn = document.getElementById('loadall');
     btn.textContent = state.showAll ? 'Show AI-attributed only' : 'Load all ' + fmt(inbound) + ' inbound MQLs';
     var note = '';
-    if (state.showAll && co && co < D.nonAiMin) note = 'Non-AI contact detail covers ' + D.nonAiMin + ' onward; earlier non-AI MQLs are included in counts only.';
-    if (state.showAll && !co) note = 'Non-AI contact detail covers ' + D.nonAiMin + ' onward; AI-attributed detail is complete back to 2025-03-24. Earlier non-AI MQLs are included in counts only.';
+    if (state.showAll && (!co || co < D.nonAiMin)) note = 'Non-AI contact detail covers ' + D.nonAiMin + ' onward; AI-attributed detail is complete back to ' + D.contactMin + '. Earlier non-AI MQLs are included in counts only.';
     document.getElementById('mql-note').textContent = note;
 
     document.getElementById('od-footer').textContent = 'Generated ' + D.generatedAt + ' \\u00b7 refreshed daily via Claude scheduled task';

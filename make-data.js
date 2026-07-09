@@ -15,16 +15,17 @@
 const fs = require('fs');
 const path = require('path');
 
-// AI-attributed MQLs that predate the rolling ~12-month contact window
-// (the contact query caps at 5000 rows). One-time archaeology via a
-// lead.utm_source AI-filtered query on 2026-07-09; the full AI MQL history
-// started 2025-03-24. If the contact window's oldest date ever advances past
-// rows still missing here, re-run that query and extend this list (REFRESH.md).
-const HISTORICAL_AI_BACKFILL = [
-  { 'lead.mql_date_date': '2025-03-31', 'lead.first_name': 'Shad', 'lead.last_name': 'Nelson', 'lead.email': 'shad.nelson@devz.ai', 'lead.company': 'Devz', 'lead.sub_source': 'chatgpt', 'lead.utm_source': 'chatgpt.com', 'lead.utm_medium': null, 'lead.form_name': 'Demo V4' },
-  { 'lead.mql_date_date': '2025-03-26', 'lead.first_name': 'Phuong', 'lead.last_name': 'Rosa', 'lead.email': 'phuong.nguyen@journeyh.io', 'lead.company': 'Journeyhorizon', 'lead.sub_source': 'chatgpt', 'lead.utm_source': 'chatgpt.com', 'lead.utm_medium': null, 'lead.form_name': 'Demo V4 (multi step)' },
-  { 'lead.mql_date_date': '2025-03-24', 'lead.first_name': 'Phuong', 'lead.last_name': 'Rosa', 'lead.email': 'phuong.nguyen@journeyh.io', 'lead.company': 'Journeyhorizon', 'lead.sub_source': 'chatgpt', 'lead.utm_source': 'chatgpt.com', 'lead.utm_medium': null, 'lead.form_name': 'Demo V4' },
-];
+// Dashboard window: everything older than this is dropped at merge time.
+// (Charles's call 2026-07-09: 12 months is enough; the all-time AI MQL
+// history only starts 2025-03-24 anyway.)
+const TRIM_DAYS = 365;
+
+// AI-attributed MQLs that predate the rolling 5000-row contact window but
+// fall inside TRIM_DAYS. Currently empty: the pre-window AI MQLs (first one
+// 2025-03-24, found via a lead.utm_source AI-filtered query on 2026-07-09)
+// are older than the 12-month window. If the contact window ever shrinks
+// below TRIM_DAYS, re-run that query and add the missing rows here.
+const HISTORICAL_AI_BACKFILL = [];
 
 function readRows(p) {
   let raw = fs.readFileSync(p, 'utf8');
@@ -39,6 +40,19 @@ if (!mqlMonthlyFile) {
   process.exit(1);
 }
 
+function addDays(iso, delta) {
+  const t = new Date(`${iso}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + delta);
+  return t.toISOString().slice(0, 10);
+}
+
+const trafficTotalAll = readRows(trafficTotalFile);
+const maxTrafficDate = trafficTotalAll.reduce((m, r) => {
+  const d = String(r['google_analytics.event_date']).slice(0, 10);
+  return d > m ? d : m;
+}, '');
+const trimCutoff = addDays(maxTrafficDate, -TRIM_DAYS);
+
 let contacts = readRows(mqlContactsFile);
 // The contact query caps at 5000 rows sorted by date desc, so the oldest
 // returned day is usually partial — drop it to keep daily counts honest.
@@ -48,14 +62,16 @@ const minDate = contacts.reduce((m, r) => {
 }, null);
 const capped = contacts.length >= 5000;
 if (capped) contacts = contacts.filter((r) => r['lead.mql_date_date'] > minDate);
+contacts = contacts.filter((r) => r['lead.mql_date_date'] >= trimCutoff);
 
 const data = {
   generatedAt: new Date().toISOString(),
-  trafficDailyAi: readRows(trafficAiFile),
-  trafficDailyTotal: readRows(trafficTotalFile),
+  trimCutoff,
+  trafficDailyAi: readRows(trafficAiFile).filter((r) => String(r['google_analytics.event_date']).slice(0, 10) >= trimCutoff),
+  trafficDailyTotal: trafficTotalAll.filter((r) => String(r['google_analytics.event_date']).slice(0, 10) >= trimCutoff),
   mqls: contacts,
-  mqlMonthly: readRows(mqlMonthlyFile),
-  historicalAiBackfill: HISTORICAL_AI_BACKFILL,
+  mqlMonthly: readRows(mqlMonthlyFile).filter((r) => String(r['lead.mql_date_month']) >= trimCutoff.slice(0, 7)),
+  historicalAiBackfill: HISTORICAL_AI_BACKFILL.filter((r) => r['lead.mql_date_date'] >= trimCutoff),
 };
 
 const out = path.join(__dirname, 'data.json');
