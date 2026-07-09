@@ -1,0 +1,15 @@
+{
+  "model": "ops",
+  "view": "google_analytics",
+  "fields": [
+    "google_analytics.event_date",
+    "google_analytics.traffic_source__source",
+    "google_analytics.sum_users"
+  ],
+  "filters": {
+    "google_analytics.event_date": "{{PERIOD_DAYS}} days",
+    "google_analytics.timescale": "DAY"
+  },
+  "sorts": ["google_analytics.event_date"],
+  "limit": "10000"
+}

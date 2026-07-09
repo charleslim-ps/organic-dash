@@ -108,7 +108,19 @@ async function lookerRunTraffic(token) {
     }, JSON.stringify(query));
   }
 
-  throw new Error('Set LOOKER_LOOK_ID or LOOKER_QUERY_JSON');
+  const queryFile = path.join(__dirname, 'query.json');
+  if (fs.existsSync(queryFile)) {
+    const raw = fs
+      .readFileSync(queryFile, 'utf8')
+      .replace(/\{\{PERIOD_DAYS\}\}/g, String(PERIOD_DAYS));
+    const query = JSON.parse(raw);
+    return request(`${LOOKER_BASE}/api/4.0/queries/run/json`, {
+      method: 'POST',
+      headers,
+    }, JSON.stringify(query));
+  }
+
+  throw new Error('Set LOOKER_LOOK_ID or LOOKER_QUERY_JSON, or commit a query.json');
 }
 
 async function hubspotSearchMqls() {
@@ -192,7 +204,7 @@ function normalizeLookerRows(rows) {
   const dateKey =
     keys.find((k) => /date|week|day/i.test(k)) || keys[0];
   const sessionsKey =
-    keys.find((k) => /session|visit|traffic|count/i.test(k)) ||
+    keys.find((k) => /session|visit|traffic|count|users/i.test(k) && typeof rows[0][k] === 'number') ||
     keys.find((k) => typeof rows[0][k] === 'number') ||
     keys[1];
   const referrerKey = keys.find((k) => /referrer|source|channel/i.test(k));

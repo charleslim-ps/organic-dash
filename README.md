@@ -20,7 +20,6 @@ cd projects\organic-dash
 $env:LOOKER_CLIENT_ID = "..."
 $env:LOOKER_CLIENT_SECRET = "..."
 $env:HUBSPOT_API_TOKEN = "..."
-$env:LOOKER_LOOK_ID = "..."      # saved Look for AI referral traffic
 
 node build.js
 # open index.html
@@ -40,7 +39,19 @@ Generate at: https://reporting.partnerstack.com/admin/users
 1. Open your user → **Edit API Keys** → **New API Key**.
 2. Copy **Client ID** and **Client Secret** (secret shown once).
 
-Save the Look you want to use (e.g. from GTM Daily Pulse → Website Traffic, filtered to AI referrers). Note the Look ID from the URL: `/looks/123`.
+## Traffic query
+
+The default traffic query is committed as [`query.json`](query.json): daily users by
+`traffic_source__source` from the `ops::google_analytics` explore (same source as the
+GTM Daily Pulse "Website Traffic by Week" tile). `{{PERIOD_DAYS}}` is substituted at
+build time. `build.js` classifies AI referrers (chatgpt, perplexity, claude.ai, gemini,
+copilot, …) via regex, so no Looker-side filter is needed.
+
+Overrides, in priority order:
+
+1. `LOOKER_LOOK_ID` — run a saved Look instead
+2. `LOOKER_QUERY_JSON` — inline query JSON
+3. `query.json` — committed default
 
 ## HubSpot token
 
@@ -57,7 +68,7 @@ Copy the access token.
 | `LOOKER_CLIENT_ID` | yes | Looker API |
 | `LOOKER_CLIENT_SECRET` | yes | Looker API |
 | `HUBSPOT_API_TOKEN` | yes | Private app token |
-| `LOOKER_LOOK_ID` | yes | Saved traffic Look ID |
+| `LOOKER_LOOK_ID` | no | Saved traffic Look ID (default: committed `query.json`) |
 | `ZAPIER_WEBHOOK_URL` | no | Ping after successful build |
 
 Optional **Variables** (Settings → Secrets and variables → Actions → Variables):
