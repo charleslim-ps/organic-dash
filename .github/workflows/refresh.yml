@@ -2,8 +2,8 @@ name: Refresh dashboard
 
 on:
   schedule:
-    # Mondays 14:00 UTC
-    - cron: '0 14 * * 1'
+    # Daily 05:00 UTC = 12:00 AM Eastern (EST; 1:00 AM during EDT)
+    - cron: '0 5 * * *'
   workflow_dispatch:
 
 permissions:
