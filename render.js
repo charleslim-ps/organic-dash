@@ -1,23 +1,16 @@
 #!/usr/bin/env node
 /**
- * organic-dash render — MCP-native path.
+ * organic-dash render — MCP-native path, interactive page.
  *
- * Reads data.json (raw rows dumped from the Claude Looker MCP) and writes:
- *   index.html    self-contained page (dark theme)
- *   artifact.html body-only fragment for a Claude Artifact (theme-aware)
+ * Reads data.json (built by make-data.js from raw Looker MCP results) and writes:
+ *   index.html    self-contained interactive page
+ *   artifact.html body-only fragment for the Claude Artifact (same content)
  *
- * data.json shape (raw MCP field names, no transformation needed):
- * {
- *   generatedAt: ISO string,
- *   periodDays: 30,
- *   totalsBySource: [{ "google_analytics.source_medium", "google_analytics.sum_users" }],
- *   trafficDaily:   [{ "google_analytics.event_date", "google_analytics.traffic_source__source", "google_analytics.sum_users" }],
- *   mqls:           [{ "lead.mql_date_date", "lead.first_name", "lead.last_name", "lead.email",
- *                      "lead.company", "lead.lead_source", "lead.sub_source", "lead.utm_source",
- *                      "lead.utm_medium", "lead.form_name" }]
- * }
- *
- * See REFRESH.md for the exact MCP queries that produce data.json.
+ * The page embeds a compact data payload and renders client-side, with global
+ * period filters (7d / 30d / 90d / All) driving every KPI, the chart, the
+ * referrer table, and the MQL table. Contact-level rows are embedded for all
+ * AI-attributed MQLs plus non-AI MQLs in the most recent 90 days; older non-AI
+ * MQLs are represented in daily/monthly counts only, to keep the page small.
  */
 
 const fs = require('fs');
@@ -25,188 +18,391 @@ const path = require('path');
 
 // No bare "you.com" — it substring-matches peekyou.com.
 const AI_RE = /chatgpt|openai|perplexity|claude\.ai|anthropic|gemini|copilot|phind|poe\.com|notebooklm/i;
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+const NON_AI_DETAIL_DAYS = 90;
 
 function loadData() {
   const raw = fs.readFileSync(path.join(__dirname, 'data.json'), 'utf8');
   return JSON.parse(raw);
 }
 
-function normalizeTraffic(rows) {
-  const byDate = new Map();
-  const referrers = {};
-  for (const row of rows) {
-    const source = String(row['google_analytics.traffic_source__source'] || '');
-    if (!AI_RE.test(source)) continue;
-    const date = String(row['google_analytics.event_date']).slice(0, 10);
-    const users = Number(row['google_analytics.sum_users']) || 0;
-    if (!byDate.has(date)) byDate.set(date, { date, aiUsers: 0 });
-    byDate.get(date).aiUsers += users;
-    referrers[source] = (referrers[source] || 0) + users;
+function mqlAttribution(r) {
+  return [r['lead.sub_source'], r['lead.utm_source'], r['lead.utm_medium'], r['lead.form_name']]
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function buildPayload(data) {
+  // Traffic: [date, source, users], AI-only (defensive re-filter by regex).
+  const ai = data.trafficDailyAi
+    .filter((r) => AI_RE.test(String(r['google_analytics.traffic_source__source'] || '')))
+    .map((r) => [
+      String(r['google_analytics.event_date']).slice(0, 10),
+      String(r['google_analytics.traffic_source__source']),
+      Number(r['google_analytics.sum_users']) || 0,
+    ])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  const tot = data.trafficDailyTotal
+    .map((r) => [String(r['google_analytics.event_date']).slice(0, 10), Number(r['google_analytics.sum_users']) || 0])
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  // MQL contact rows: classify, then embed AI rows (always) + non-AI rows
+  // within the last NON_AI_DETAIL_DAYS of coverage.
+  const contacts = data.mqls.map((r) => {
+    const attribution = mqlAttribution(r);
+    return {
+      d: String(r['lead.mql_date_date'] || '').slice(0, 10),
+      n: [r['lead.first_name'], r['lead.last_name']].filter(Boolean).join(' ') || '—',
+      e: r['lead.email'] || '—',
+      c: r['lead.company'] || '—',
+      a: attribution,
+      ai: AI_RE.test(attribution) ? 1 : 0,
+    };
+  });
+
+  const backfill = (data.historicalAiBackfill || []).map((r) => ({
+    d: String(r['lead.mql_date_date']).slice(0, 10),
+    n: [r['lead.first_name'], r['lead.last_name']].filter(Boolean).join(' ') || '—',
+    e: r['lead.email'] || '—',
+    c: r['lead.company'] || '—',
+    a: mqlAttribution(r),
+    ai: 1,
+  }));
+
+  const dates = contacts.map((m) => m.d).sort();
+  const contactMin = dates[0] || '';
+  const maxDate = dates[dates.length - 1] || '';
+  const nonAiMin = addDays(maxDate, -NON_AI_DETAIL_DAYS);
+
+  const seen = new Set();
+  const rows = [];
+  for (const m of [...contacts, ...backfill]) {
+    const key = `${m.d}|${m.e}|${m.n}`;
+    if (m.ai) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(m);
+    } else if (m.d >= nonAiMin) {
+      rows.push(m);
+    }
   }
+  rows.sort((a, b) => b.d.localeCompare(a.d));
+
+  // Daily inbound counts from full contact coverage (for 7/30/90d denominators).
+  const mqlDaily = {};
+  for (const m of contacts) mqlDaily[m.d] = (mqlDaily[m.d] || 0) + 1;
+
+  const allInbound = data.mqlMonthly.reduce((s, r) => s + (Number(r['lead.count']) || 0), 0);
+
   return {
-    daily: [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    referrers: Object.entries(referrers).sort((a, b) => b[1] - a[1]),
+    generatedAt: data.generatedAt,
+    ai,
+    tot,
+    rows: rows.map((m) => [m.d, m.n, m.e, m.c, m.a, m.ai]),
+    mqlDaily: Object.entries(mqlDaily).sort((a, b) => a[0].localeCompare(b[0])),
+    allInbound,
+    contactMin,
+    nonAiMin,
+    mqlAllTimeMin: (data.mqlMonthly[0] || {})['lead.mql_date_month'] || '',
   };
 }
 
-function normalizeMqls(rows) {
-  return rows.map((r) => {
-    const attribution = [
-      r['lead.sub_source'],
-      r['lead.utm_source'],
-      r['lead.utm_medium'],
-      r['lead.form_name'],
-    ]
-      .filter(Boolean)
-      .join(' | ');
-    return {
-      date: String(r['lead.mql_date_date'] || '').slice(0, 10),
-      name: [r['lead.first_name'], r['lead.last_name']].filter(Boolean).join(' ') || '—',
-      email: r['lead.email'] || '—',
-      company: r['lead.company'] || '—',
-      attribution,
-      ai: AI_RE.test(attribution),
-    };
-  });
+function addDays(iso, delta) {
+  if (!iso) return '';
+  const t = new Date(`${iso}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + delta);
+  return t.toISOString().slice(0, 10);
 }
 
-function buildContent(data) {
-  const { daily, referrers } = normalizeTraffic(data.trafficDaily);
-  const mqls = normalizeMqls(data.mqls);
-  const aiMqls = mqls.filter((m) => m.ai);
-
-  const aiUsers = daily.reduce((s, d) => s + d.aiUsers, 0);
-  const totalUsers = (data.totalsBySource || []).reduce(
-    (s, r) => s + (Number(r['google_analytics.sum_users']) || 0),
-    0
-  );
-  const mqlShare = mqls.length ? ((aiMqls.length / mqls.length) * 100).toFixed(1) : '0.0';
-  const convRate = aiUsers ? ((aiMqls.length / aiUsers) * 100).toFixed(2) : '0.00';
-  const maxDaily = Math.max(...daily.map((d) => d.aiUsers), 1);
-
-  const chartBars = daily
-    .map(
-      (d) => `
-      <div class="bar-row" title="${d.date}: ${d.aiUsers} AI users">
-        <span class="bar-label">${d.date.slice(5)}</span>
-        <div class="bar-track"><div class="bar-fill" style="width:${((d.aiUsers / maxDaily) * 100).toFixed(1)}%"></div></div>
-        <span class="bar-val">${d.aiUsers}</span>
-      </div>`
-    )
-    .join('');
-
-  const refRows = referrers
-    .map(([ref, n]) => `<tr><td>${escapeHtml(ref)}</td><td class="num">${n.toLocaleString()}</td></tr>`)
-    .join('');
-
-  const mqlRows = aiMqls
-    .map(
-      (m) => `
-      <tr>
-        <td class="nowrap">${escapeHtml(m.date)}</td>
-        <td>${escapeHtml(m.company)}</td>
-        <td>${escapeHtml(m.name)}</td>
-        <td class="attr">${escapeHtml(m.email)}</td>
-        <td class="attr">${escapeHtml(m.attribution.slice(0, 80))}</td>
-      </tr>`
-    )
-    .join('');
-
-  const style = `
-    .od-wrap { max-width: 1100px; margin: 0 auto; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5; color: var(--od-text); }
-    .od-wrap { --od-text: #1a2332; --od-muted: #5a6b82; --od-card: #ffffff; --od-border: #d7dfeb; --od-track: #eef2f8; --od-accent: #2f6fb2; --od-accent2: #5a9bd9; --od-green: #157f5f; }
+const STYLE = `
+    .od-wrap { max-width: 1200px; margin: 0 auto; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5; color: var(--od-text); }
+    .od-wrap { --od-text: #1a2332; --od-muted: #5a6b82; --od-card: #ffffff; --od-border: #d7dfeb; --od-track: #eef2f8; --od-grid: #e3e9f2; --od-accent: #2f6fb2; --od-accent2: #5a9bd9; --od-green: #157f5f; --od-chipbg: #e8f2ec; }
     @media (prefers-color-scheme: dark) {
-      .od-wrap { --od-text: #e7ecf3; --od-muted: #8b9cb3; --od-card: #1a2332; --od-border: #2a3548; --od-track: #111820; --od-accent: #4a90d9; --od-accent2: #6eb5ff; --od-green: #3ecf8e; }
+      .od-wrap { --od-text: #e7ecf3; --od-muted: #8b9cb3; --od-card: #1a2332; --od-border: #2a3548; --od-track: #111820; --od-grid: #232e42; --od-accent: #4a90d9; --od-accent2: #6eb5ff; --od-green: #3ecf8e; --od-chipbg: #16342a; }
     }
-    :root[data-theme="dark"] .od-wrap { --od-text: #e7ecf3; --od-muted: #8b9cb3; --od-card: #1a2332; --od-border: #2a3548; --od-track: #111820; --od-accent: #4a90d9; --od-accent2: #6eb5ff; --od-green: #3ecf8e; }
-    :root[data-theme="light"] .od-wrap { --od-text: #1a2332; --od-muted: #5a6b82; --od-card: #ffffff; --od-border: #d7dfeb; --od-track: #eef2f8; --od-accent: #2f6fb2; --od-accent2: #5a9bd9; --od-green: #157f5f; }
-    .od-wrap h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
-    .od-wrap .sub { color: var(--od-muted); margin: 0 0 1.5rem; font-size: 0.95rem; }
-    .od-wrap .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    :root[data-theme="dark"] .od-wrap { --od-text: #e7ecf3; --od-muted: #8b9cb3; --od-card: #1a2332; --od-border: #2a3548; --od-track: #111820; --od-grid: #232e42; --od-accent: #4a90d9; --od-accent2: #6eb5ff; --od-green: #3ecf8e; --od-chipbg: #16342a; }
+    :root[data-theme="light"] .od-wrap { --od-text: #1a2332; --od-muted: #5a6b82; --od-card: #ffffff; --od-border: #d7dfeb; --od-track: #eef2f8; --od-grid: #e3e9f2; --od-accent: #2f6fb2; --od-accent2: #5a9bd9; --od-green: #157f5f; --od-chipbg: #e8f2ec; }
+    .od-wrap .head { display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline; justify-content: space-between; margin-bottom: 1.25rem; }
+    .od-wrap h1 { font-size: 1.5rem; margin: 0; }
+    .od-wrap .sub { color: var(--od-muted); margin: 0.15rem 0 0; font-size: 0.9rem; }
+    .od-wrap .filters { display: flex; gap: 6px; }
+    .od-wrap .filters button { font: inherit; font-size: 0.82rem; font-weight: 600; padding: 0.35rem 0.9rem; border-radius: 999px; border: 1px solid var(--od-border); background: var(--od-card); color: var(--od-muted); cursor: pointer; }
+    .od-wrap .filters button:hover { border-color: var(--od-accent); }
+    .od-wrap .filters button:focus-visible { outline: 2px solid var(--od-accent); outline-offset: 2px; }
+    .od-wrap .filters button[aria-pressed="true"] { background: var(--od-accent); border-color: var(--od-accent); color: #fff; }
+    .od-wrap .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
     .od-wrap .kpi { background: var(--od-card); border: 1px solid var(--od-border); border-radius: 12px; padding: 1rem 1.15rem; }
-    .od-wrap .kpi .label { color: var(--od-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .od-wrap .kpi .value { font-size: 1.8rem; font-weight: 700; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+    .od-wrap .kpi .label { color: var(--od-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .od-wrap .kpi .value { font-size: 1.75rem; font-weight: 700; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
     .od-wrap .kpi .value.green { color: var(--od-green); }
-    .od-wrap .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 1.25rem; }
-    @media (max-width: 800px) { .od-wrap .grid { grid-template-columns: 1fr; } }
     .od-wrap .card { background: var(--od-card); border: 1px solid var(--od-border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.25rem; }
     .od-wrap .card h2 { font-size: 0.95rem; margin: 0 0 1rem; color: var(--od-muted); font-weight: 600; }
-    .od-wrap .bar-row { display: grid; grid-template-columns: 48px 1fr 40px; gap: 0.5rem; align-items: center; margin-bottom: 5px; font-size: 0.78rem; }
-    .od-wrap .bar-label { color: var(--od-muted); }
-    .od-wrap .bar-track { background: var(--od-track); border-radius: 4px; height: 16px; overflow: hidden; }
-    .od-wrap .bar-fill { background: linear-gradient(90deg, var(--od-accent), var(--od-accent2)); height: 100%; border-radius: 4px; min-width: 2px; }
-    .od-wrap .bar-val { text-align: right; color: var(--od-muted); }
+    .od-wrap .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+    @media (max-width: 800px) { .od-wrap .grid2 { grid-template-columns: 1fr; } }
+    .od-wrap .chart { position: relative; height: 260px; }
+    .od-wrap .gridline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--od-grid); }
+    .od-wrap .gridline span { position: absolute; right: 0; top: -1.05rem; font-size: 0.68rem; color: var(--od-muted); font-variant-numeric: tabular-nums; }
+    .od-wrap .bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; }
+    .od-wrap .bars.dense { gap: 1px; }
+    .od-wrap .bar { flex: 1 1 0; min-width: 1px; height: 100%; display: flex; align-items: flex-end; cursor: default; }
+    .od-wrap .bar > i { display: block; width: 100%; background: linear-gradient(180deg, var(--od-accent2), var(--od-accent)); border-radius: 3px 3px 0 0; }
+    .od-wrap .bar:hover > i { background: var(--od-accent2); }
+    .od-wrap .xlabels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 0.7rem; color: var(--od-muted); font-variant-numeric: tabular-nums; }
+    .od-wrap .tip { position: absolute; pointer-events: none; background: var(--od-card); border: 1px solid var(--od-border); border-radius: 8px; padding: 0.35rem 0.6rem; font-size: 0.78rem; box-shadow: 0 4px 14px rgba(0,0,0,0.25); white-space: nowrap; z-index: 5; display: none; }
+    .od-wrap .tip b { font-variant-numeric: tabular-nums; }
     .od-wrap .tbl-scroll { overflow-x: auto; }
     .od-wrap table { width: 100%; border-collapse: collapse; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
-    .od-wrap .bar-val, .od-wrap .bar-label { font-variant-numeric: tabular-nums; }
     .od-wrap th, .od-wrap td { text-align: left; padding: 0.45rem 0.4rem; border-bottom: 1px solid var(--od-border); }
     .od-wrap th { color: var(--od-muted); font-weight: 600; font-size: 0.72rem; text-transform: uppercase; }
     .od-wrap td.attr { color: var(--od-muted); font-size: 0.78rem; }
     .od-wrap td.num { text-align: right; }
     .od-wrap td.nowrap { white-space: nowrap; }
+    .od-wrap .chip { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 999px; background: var(--od-chipbg); color: var(--od-green); font-size: 0.7rem; font-weight: 600; }
+    .od-wrap .loadall { font: inherit; font-size: 0.82rem; font-weight: 600; margin-top: 0.75rem; padding: 0.4rem 1rem; border-radius: 8px; border: 1px solid var(--od-border); background: transparent; color: var(--od-accent); cursor: pointer; }
+    .od-wrap .loadall:hover { border-color: var(--od-accent); }
+    .od-wrap .loadall:focus-visible { outline: 2px solid var(--od-accent); outline-offset: 2px; }
+    .od-wrap .note { font-size: 0.75rem; color: var(--od-muted); margin-top: 0.5rem; }
     .od-wrap .method { font-size: 0.83rem; color: var(--od-muted); }
     .od-wrap footer { margin-top: 1.5rem; color: var(--od-muted); font-size: 0.78rem; }
-  `;
+`;
 
-  const body = `
+const MARKUP = `
   <div class="od-wrap">
-    <h1>Organic Dash</h1>
-    <p class="sub">LLM referral traffic → MQL conversion · PartnerStack · last ${data.periodDays} days</p>
-
-    <div class="kpis">
-      <div class="kpi"><div class="label">AI referral users</div><div class="value">${aiUsers.toLocaleString()}</div></div>
-      <div class="kpi"><div class="label">AI-attributed MQLs</div><div class="value green">${aiMqls.length}</div></div>
-      <div class="kpi"><div class="label">Share of inbound MQLs</div><div class="value">${mqlShare}%</div></div>
-      <div class="kpi"><div class="label">AI user → MQL rate</div><div class="value">${convRate}%</div></div>
-      <div class="kpi"><div class="label">All site users</div><div class="value">${totalUsers.toLocaleString()}</div></div>
+    <div class="head">
+      <div>
+        <h1>Organic Dash</h1>
+        <p class="sub">LLM referral traffic → MQL conversion · PartnerStack · <span id="od-period-label"></span></p>
+      </div>
+      <div class="filters" role="group" aria-label="Time period">
+        <button data-p="7">7d</button>
+        <button data-p="30">30d</button>
+        <button data-p="90">90d</button>
+        <button data-p="all">All time</button>
+      </div>
     </div>
 
-    <div class="grid">
+    <div class="kpis">
+      <div class="kpi"><div class="label">AI referral users</div><div class="value" id="k-ai"></div></div>
+      <div class="kpi"><div class="label">AI-attributed MQLs</div><div class="value green" id="k-mql"></div></div>
+      <div class="kpi"><div class="label">Share of inbound MQLs</div><div class="value" id="k-share"></div></div>
+      <div class="kpi"><div class="label">AI user → MQL rate</div><div class="value" id="k-conv"></div></div>
+      <div class="kpi"><div class="label">All site users</div><div class="value" id="k-tot"></div></div>
+    </div>
+
+    <div class="card">
+      <h2 id="chart-title">AI referral users by day</h2>
+      <div class="chart" id="chart"></div>
+      <div class="xlabels" id="xlabels"></div>
+    </div>
+
+    <div class="grid2">
       <div class="card">
-        <h2>AI referral users by day</h2>
-        ${chartBars || '<p class="method">No traffic rows in data.json.</p>'}
+        <h2 id="ref-title">AI referrers</h2>
+        <div class="tbl-scroll"><table><thead><tr><th>Source</th><th class="num">Users</th></tr></thead><tbody id="ref-body"></tbody></table></div>
       </div>
-      <div class="card">
-        <h2>AI referrers (${data.periodDays}d)</h2>
-        <div class="tbl-scroll"><table><thead><tr><th>Source</th><th class="num">Users</th></tr></thead><tbody>${refRows || '<tr><td colspan="2">none</td></tr>'}</tbody></table></div>
+      <div class="card method">
+        <h2>Methodology</h2>
+        <p>Traffic: Looker <code>ops::google_analytics</code>, daily users by raw <code>traffic_source__source</code>,
+        AI referrers matched by regex (chatgpt, openai, perplexity, claude.ai, gemini, copilot, phind, poe.com, notebooklm).
+        MQLs: Looker <code>salesforce::lead</code> — <code>mql_date</code> in period, <code>lead_source = Inbound</code>,
+        status excludes Holding (same definition as GTM Daily Pulse). AI attribution = regex over
+        <code>sub_source</code>, <code>utm_source</code>, <code>utm_medium</code>, <code>form_name</code>.
+        Data pulled via Claude MCP connectors; no direct API credentials.</p>
       </div>
     </div>
 
     <div class="card">
-      <h2>AI-attributed inbound MQLs (${aiMqls.length} of ${mqls.length} inbound MQLs)</h2>
+      <h2 id="mql-title">AI-attributed inbound MQLs</h2>
       <div class="tbl-scroll"><table>
         <thead><tr><th>MQL date</th><th>Company</th><th>Contact</th><th>Email</th><th>Attribution</th></tr></thead>
-        <tbody>${mqlRows || '<tr><td colspan="5">No AI-attributed MQLs in period</td></tr>'}</tbody>
+        <tbody id="mql-body"></tbody>
       </table></div>
+      <button class="loadall" id="loadall"></button>
+      <div class="note" id="mql-note"></div>
     </div>
 
-    <div class="card method">
-      <h2>Methodology</h2>
-      <p>Traffic: Looker <code>ops::google_analytics</code>, daily users by raw <code>traffic_source__source</code>,
-      filtered to AI referrers by regex (chatgpt, openai, perplexity, claude.ai, gemini, copilot, phind, poe.com, notebooklm).
-      MQLs: Looker <code>salesforce::lead</code> — <code>mql_date</code> in period, <code>lead_source = Inbound</code>,
-      status excludes Holding (same definition as GTM Daily Pulse). AI attribution = regex over
-      <code>sub_source</code>, <code>utm_source</code>, <code>utm_medium</code>, <code>form_name</code>.
-      Data pulled via Claude MCP connectors; no direct API credentials.</p>
-    </div>
+    <footer id="od-footer"></footer>
+    <div class="tip" id="tip"></div>
+  </div>
+`;
 
-    <footer>Generated ${escapeHtml(data.generatedAt)} · refreshed via Claude scheduled task</footer>
-  </div>`;
+// Client-side app. Kept as a plain string so render.js stays dependency-free.
+const SCRIPT = `
+(function () {
+  var D = window.__OD_DATA__;
+  var state = { period: '30', showAll: false };
 
-  return { style, body };
-}
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function fmt(n) { return Number(n).toLocaleString('en-US'); }
+  function addDays(iso, delta) {
+    var t = new Date(iso + 'T00:00:00Z');
+    t.setUTCDate(t.getUTCDate() + delta);
+    return t.toISOString().slice(0, 10);
+  }
+  function maxDate() {
+    var m = '';
+    if (D.ai.length) m = D.ai[D.ai.length - 1][0];
+    if (D.tot.length && D.tot[D.tot.length - 1][0] > m) m = D.tot[D.tot.length - 1][0];
+    if (D.mqlDaily.length && D.mqlDaily[D.mqlDaily.length - 1][0] > m) m = D.mqlDaily[D.mqlDaily.length - 1][0];
+    return m;
+  }
+  function cutoff() {
+    if (state.period === 'all') return '';
+    return addDays(maxDate(), -Number(state.period));
+  }
+
+  function weekStart(iso) {
+    var t = new Date(iso + 'T00:00:00Z');
+    var dow = (t.getUTCDay() + 6) % 7; // Monday = 0
+    t.setUTCDate(t.getUTCDate() - dow);
+    return t.toISOString().slice(0, 10);
+  }
+
+  function render() {
+    var co = cutoff();
+    var inWin = function (d) { return !co || d >= co; };
+
+    // --- traffic aggregates
+    var aiByDay = {}, refTotals = {}, aiUsers = 0;
+    D.ai.forEach(function (r) {
+      if (!inWin(r[0])) return;
+      aiByDay[r[0]] = (aiByDay[r[0]] || 0) + r[2];
+      refTotals[r[1]] = (refTotals[r[1]] || 0) + r[2];
+      aiUsers += r[2];
+    });
+    var totUsers = 0;
+    D.tot.forEach(function (r) { if (inWin(r[0])) totUsers += r[1]; });
+
+    // --- MQL aggregates
+    var aiMqls = D.rows.filter(function (r) { return r[5] === 1 && inWin(r[0]); });
+    var inbound;
+    if (state.period === 'all') {
+      inbound = D.allInbound;
+    } else {
+      inbound = 0;
+      D.mqlDaily.forEach(function (r) { if (inWin(r[0])) inbound += r[1]; });
+    }
+
+    // --- KPIs
+    document.getElementById('k-ai').textContent = fmt(aiUsers);
+    document.getElementById('k-mql').textContent = fmt(aiMqls.length);
+    document.getElementById('k-share').textContent = inbound ? ((aiMqls.length / inbound) * 100).toFixed(1) + '%' : '—';
+    document.getElementById('k-conv').textContent = aiUsers ? ((aiMqls.length / aiUsers) * 100).toFixed(2) + '%' : '—';
+    document.getElementById('k-tot').textContent = fmt(totUsers);
+    document.getElementById('od-period-label').textContent =
+      state.period === 'all' ? 'all time (traffic since ' + (D.tot[0] ? D.tot[0][0] : '—') + ', MQLs since ' + D.mqlAllTimeMin + ')' : 'last ' + state.period + ' days';
+
+    // --- chart (daily; weekly when the window is long)
+    var days = Object.keys(aiByDay).sort();
+    var weekly = days.length > 120;
+    var buckets = {};
+    days.forEach(function (d) {
+      var k = weekly ? weekStart(d) : d;
+      buckets[k] = (buckets[k] || 0) + aiByDay[d];
+    });
+    var keys = Object.keys(buckets).sort();
+    document.getElementById('chart-title').textContent = 'AI referral users by ' + (weekly ? 'week' : 'day');
+    var max = 1;
+    keys.forEach(function (k) { if (buckets[k] > max) max = buckets[k]; });
+    var chart = document.getElementById('chart');
+    var html = '';
+    [0.25, 0.5, 0.75, 1].forEach(function (f) {
+      html += '<div class="gridline" style="bottom:' + f * 100 + '%"><span>' + fmt(Math.round(max * f)) + '</span></div>';
+    });
+    html += '<div class="bars' + (keys.length > 90 ? ' dense' : '') + '">';
+    keys.forEach(function (k, i) {
+      var v = buckets[k];
+      var h = Math.max((v / max) * 100, v > 0 ? 1 : 0);
+      html += '<div class="bar" data-i="' + i + '"><i style="height:' + h.toFixed(2) + '%"></i></div>';
+    });
+    html += '</div>';
+    chart.innerHTML = html;
+    chart.__keys = keys;
+    chart.__buckets = buckets;
+    chart.__weekly = weekly;
+
+    var xl = document.getElementById('xlabels');
+    var ticks = [];
+    var n = Math.min(8, keys.length);
+    for (var i = 0; i < n; i++) ticks.push(keys[Math.round((i * (keys.length - 1)) / Math.max(n - 1, 1))]);
+    xl.innerHTML = ticks.map(function (t) { return '<span>' + t.slice(2) + '</span>'; }).join('');
+
+    // --- referrers
+    var refs = Object.keys(refTotals).map(function (k) { return [k, refTotals[k]]; }).sort(function (a, b) { return b[1] - a[1]; });
+    document.getElementById('ref-title').textContent = 'AI referrers (' + (state.period === 'all' ? 'all time' : 'last ' + state.period + 'd') + ')';
+    document.getElementById('ref-body').innerHTML = refs.map(function (r) {
+      return '<tr><td>' + esc(r[0]) + '</td><td class="num">' + fmt(r[1]) + '</td></tr>';
+    }).join('') || '<tr><td colspan="2">none</td></tr>';
+
+    // --- MQL table
+    var rows = state.showAll
+      ? D.rows.filter(function (r) { return inWin(r[0]); })
+      : aiMqls;
+    document.getElementById('mql-title').textContent =
+      (state.showAll ? 'Inbound MQLs' : 'AI-attributed inbound MQLs') + ' — ' + fmt(aiMqls.length) + ' AI of ' + fmt(inbound) + ' inbound';
+    document.getElementById('mql-body').innerHTML = rows.map(function (r) {
+      return '<tr><td class="nowrap">' + r[0] + (r[5] === 1 && state.showAll ? ' <span class="chip">AI</span>' : '') + '</td><td>' + esc(r[3]) +
+        '</td><td>' + esc(r[1]) + '</td><td class="attr">' + esc(r[2]) + '</td><td class="attr">' + esc(String(r[4]).slice(0, 80)) + '</td></tr>';
+    }).join('') || '<tr><td colspan="5">No MQLs in period</td></tr>';
+
+    var btn = document.getElementById('loadall');
+    btn.textContent = state.showAll ? 'Show AI-attributed only' : 'Load all ' + fmt(inbound) + ' inbound MQLs';
+    var note = '';
+    if (state.showAll && co && co < D.nonAiMin) note = 'Non-AI contact detail covers ' + D.nonAiMin + ' onward; earlier non-AI MQLs are included in counts only.';
+    if (state.showAll && !co) note = 'Non-AI contact detail covers ' + D.nonAiMin + ' onward; AI-attributed detail is complete back to 2025-03-24. Earlier non-AI MQLs are included in counts only.';
+    document.getElementById('mql-note').textContent = note;
+
+    document.getElementById('od-footer').textContent = 'Generated ' + D.generatedAt + ' \\u00b7 refreshed daily via Claude scheduled task';
+  }
+
+  // chart tooltip
+  var tip = document.getElementById('tip');
+  var chartEl = document.getElementById('chart');
+  chartEl.addEventListener('mousemove', function (ev) {
+    var bar = ev.target.closest ? ev.target.closest('.bar') : null;
+    if (!bar) { tip.style.display = 'none'; return; }
+    var keys = chartEl.__keys, buckets = chartEl.__buckets;
+    var k = keys[Number(bar.getAttribute('data-i'))];
+    tip.innerHTML = (chartEl.__weekly ? 'wk of ' : '') + k + ': <b>' + Number(buckets[k]).toLocaleString('en-US') + '</b> users';
+    tip.style.display = 'block';
+    var wrap = chartEl.closest('.od-wrap');
+    var wr = wrap.getBoundingClientRect();
+    var x = ev.clientX - wr.left + 14, y = ev.clientY - wr.top - 34;
+    if (x + tip.offsetWidth > wrap.clientWidth) x -= tip.offsetWidth + 24;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  });
+  chartEl.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+
+  var btns = document.querySelectorAll('.filters button');
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      state.period = b.getAttribute('data-p');
+      btns.forEach(function (o) { o.setAttribute('aria-pressed', String(o === b)); });
+      render();
+    });
+  });
+  btns.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-p') === state.period)); });
+
+  document.getElementById('loadall').addEventListener('click', function () {
+    state.showAll = !state.showAll;
+    render();
+  });
+
+  render();
+})();
+`;
 
 function main() {
   const data = loadData();
-  const { style, body } = buildContent(data);
+  const payload = buildPayload(data);
+  const payloadJson = JSON.stringify(payload).replace(/</g, '\\u003c');
+
+  const inner = `${MARKUP}
+<script>window.__OD_DATA__ = ${payloadJson};</script>
+<script>${SCRIPT}</script>`;
 
   const fullPage = `<!DOCTYPE html>
 <html lang="en">
@@ -215,23 +411,25 @@ function main() {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Organic Dash — LLM Referral → MQL</title>
   <style>
-    body { margin: 0; padding: 2rem 1.25rem 4rem; background: #0f1419; }
-    @media (prefers-color-scheme: light) { body { background: #f4f7fb; } }
-    ${style}
+    body { margin: 0; padding: 2rem 1.25rem 4rem; background: #f4f7fb; }
+    @media (prefers-color-scheme: dark) { body { background: #0f1419; } }
+    ${STYLE}
   </style>
 </head>
 <body>
-${body}
+${inner}
 </body>
 </html>`;
 
   const fragment = `<title>Organic Dash — LLM Referral → MQL</title>
-<style>${style}</style>
-${body}`;
+<style>${STYLE}</style>
+${inner}`;
 
   fs.writeFileSync(path.join(__dirname, 'index.html'), fullPage, 'utf8');
   fs.writeFileSync(path.join(__dirname, 'artifact.html'), fragment, 'utf8');
-  console.log('Wrote index.html and artifact.html');
+  console.log(
+    `Wrote index.html + artifact.html — ${payload.ai.length} AI traffic rows, ${payload.rows.length} embedded MQL rows, all-time inbound ${payload.allInbound}`
+  );
 }
 
 main();
