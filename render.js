@@ -163,9 +163,10 @@ const STYLE = `
     .od-wrap .gridline span { position: absolute; right: 0; top: -1.1rem; font-size: 0.7rem; color: var(--od-faint); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
     .od-wrap .bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 2px; }
     .od-wrap .bars.dense { gap: 1px; }
-    .od-wrap .bar { flex: 1 1 0; min-width: 1px; height: 100%; display: flex; align-items: flex-end; cursor: default; }
+    .od-wrap .bar { position: relative; flex: 1 1 0; min-width: 1px; height: 100%; display: flex; align-items: flex-end; cursor: default; }
     .od-wrap .bar > i { display: block; width: 100%; background: var(--od-accent); border-radius: 3px 3px 0 0; }
     .od-wrap .bar:hover > i { background: color-mix(in srgb, var(--od-accent) 70%, var(--od-text)); }
+    .od-wrap .bar > u { position: absolute; bottom: 0; left: 20%; width: 60%; display: block; background: var(--od-green); border-radius: 2px 2px 0 0; pointer-events: none; }
     .od-wrap .xlabels { display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.7rem; color: var(--od-faint); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
     .od-wrap .tip { position: absolute; pointer-events: none; background: var(--od-surface); border: 1px solid var(--od-border); border-radius: 0.5rem; padding: 0.4rem 0.65rem; font-size: 0.75rem; box-shadow: 0 8px 24px rgba(0,0,0,0.18); white-space: nowrap; z-index: 5; display: none; }
     .od-wrap .tip b { font-variant-numeric: tabular-nums; }
@@ -227,6 +228,7 @@ const MARKUP = `
 
     <div class="card">
       <h2 id="chart-title">AI referral users by day</h2>
+      <div class="legend"><span><span class="dot" style="background:var(--od-accent)"></span>AI referral users</span><span><span class="dot" style="background:var(--od-green)"></span>AI-attributed MQLs (own scale)</span></div>
       <div class="chart" id="chart"></div>
       <div class="xlabels" id="xlabels"></div>
     </div>
@@ -372,9 +374,20 @@ const SCRIPT = `
       buckets[k] = (buckets[k] || 0) + aiByDay[d];
     });
     var keys = Object.keys(buckets).sort();
-    document.getElementById('chart-title').textContent = 'AI referral users by ' + (weekly ? 'week' : 'day');
+    document.getElementById('chart-title').textContent = 'AI referral users + MQLs by ' + (weekly ? 'week' : 'day');
     var max = 1;
     keys.forEach(function (k) { if (buckets[k] > max) max = buckets[k]; });
+
+    // MQL overlay: same buckets, own scale (daily counts are tiny next to
+    // users), capped at 30% of chart height.
+    var mqlBuckets = {};
+    aiMqls.forEach(function (r) {
+      var k = weekly ? weekStart(r[0]) : r[0];
+      mqlBuckets[k] = (mqlBuckets[k] || 0) + 1;
+    });
+    var maxM = 0;
+    keys.forEach(function (k) { if ((mqlBuckets[k] || 0) > maxM) maxM = mqlBuckets[k]; });
+
     var chart = document.getElementById('chart');
     var html = '';
     [0.25, 0.5, 0.75, 1].forEach(function (f) {
@@ -384,12 +397,16 @@ const SCRIPT = `
     keys.forEach(function (k, i) {
       var v = buckets[k];
       var h = Math.max((v / max) * 100, v > 0 ? 1 : 0);
-      html += '<div class="bar" data-i="' + i + '"><i style="height:' + h.toFixed(2) + '%"></i></div>';
+      var m = mqlBuckets[k] || 0;
+      var mh = maxM ? (m / maxM) * 30 : 0;
+      html += '<div class="bar" data-i="' + i + '"><i style="height:' + h.toFixed(2) + '%"></i>' +
+        (m ? '<u style="height:' + mh.toFixed(2) + '%"></u>' : '') + '</div>';
     });
     html += '</div>';
     chart.innerHTML = html;
     chart.__keys = keys;
     chart.__buckets = buckets;
+    chart.__mql = mqlBuckets;
     chart.__weekly = weekly;
 
     var xl = document.getElementById('xlabels');
@@ -543,7 +560,9 @@ const SCRIPT = `
     if (!bar) { tip.style.display = 'none'; return; }
     var keys = chartEl.__keys, buckets = chartEl.__buckets;
     var k = keys[Number(bar.getAttribute('data-i'))];
-    tip.innerHTML = (chartEl.__weekly ? 'wk of ' : '') + k + ': <b>' + Number(buckets[k]).toLocaleString('en-US') + '</b> users';
+    var m = (chartEl.__mql || {})[k] || 0;
+    tip.innerHTML = (chartEl.__weekly ? 'wk of ' : '') + k + ': <b>' + Number(buckets[k]).toLocaleString('en-US') + '</b> users' +
+      (m ? ' \\u00b7 <b style="color:var(--od-green)">' + m + '</b> MQL' + (m > 1 ? 's' : '') : '');
     tip.style.display = 'block';
     var wrap = chartEl.closest('.od-wrap');
     var wr = wrap.getBoundingClientRect();
