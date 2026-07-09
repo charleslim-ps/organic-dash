@@ -1,16 +1,25 @@
 # organic-dash
 
-Static GitHub Pages dashboard showing **LLM referral traffic → MQL conversion** for PartnerStack.
+Dashboard showing **LLM referral traffic → MQL conversion** for PartnerStack.
 
-**Live site:** https://charleslim-ps.github.io/organic-dash/
+**Live (active path):** private Claude Artifact, refreshed daily by a Claude scheduled task —
+see [REFRESH.md](REFRESH.md). Contains contact-level PII, which is why it is **not** on
+GitHub Pages: this repo is public, and Pages sites are always public.
 
-## How it works
+## Active path — MCP, no credentials
 
-1. `build.js` authenticates to Looker (`reporting.partnerstack.com`) and HubSpot.
-2. Pulls AI referral sessions from a saved Looker Look.
-3. Pulls MQL contacts from HubSpot and flags AI-influenced attribution.
-4. Writes a self-contained `index.html` (no npm deps).
-5. GitHub Action runs **daily at 12 AM Eastern** (or on demand), commits fresh `index.html`.
+1. A Claude scheduled task (`organic-dash-refresh`, daily 12 AM) pulls traffic from the
+   Looker MCP (`ops::google_analytics`) and MQLs from `salesforce::lead`.
+2. Writes raw rows to `data.json` (gitignored — PII).
+3. `node render.js` → `index.html` + `artifact.html` (both gitignored — PII).
+4. Redeploys the private Claude Artifact. Definitions + exact queries: [REFRESH.md](REFRESH.md).
+
+## Dormant path — direct APIs + GitHub Pages
+
+`build.js` + `.github/workflows/refresh.yml` implement the original design: Looker + HubSpot
+REST APIs → commit `index.html` → GitHub Pages. It works but needs `LOOKER_CLIENT_ID`/
+`LOOKER_CLIENT_SECRET`/`HUBSPOT_API_TOKEN` repo secrets, and must only be revived with a
+PII-free render (or a private hosting story). Docs below cover this path.
 
 ## Quick start (local)
 

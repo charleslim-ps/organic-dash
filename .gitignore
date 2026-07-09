@@ -2,3 +2,8 @@
 .env.*
 node_modules/
 .DS_Store
+
+# Contains prospect PII — never commit (repo is public)
+data.json
+index.html
+artifact.html
