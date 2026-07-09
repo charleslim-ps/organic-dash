@@ -7,3 +7,6 @@ node_modules/
 data.json
 index.html
 artifact.html
+
+# Data artifact (no PII, but repo is code-only)
+crawl-raw.json

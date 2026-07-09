@@ -48,8 +48,22 @@ scratch JSON file yourself (raw `[...]` rows or the whole `{result: [...]}` obje
    - filters: same as step 3 · sorts: `lead.mql_date_month` · limit 100
    - Comes back inline — Write it to a scratch file.
 
+4b. **Cloudflare AI crawl data:** run `node crawl-pull.js` (in this directory)
+   → writes `crawl-raw.json` (~90 days of AI-bot requests on partnerstack.com).
+   - Auth: reuses the `cloudflare-graphql` MCP OAuth token from
+     `.credentials.json` in `$CLAUDE_CONFIG_DIR` / `~\.claude` / `~\.claude-ps`
+     (tries an OAuth refresh grant if expired). If it fails, re-authorize via
+     `/mcp` in an interactive terminal session, or fall back to the
+     `mcp__cloudflare-graphql__graphql_query` MCP tool: same GraphQL as in
+     `crawl-pull.js` (`httpRequestsAdaptiveGroups`, `verifiedBotCategory_in
+     ["AI Crawler","AI Assistant","AI Search"]`, `requestSource: "eyeball"`,
+     zone `partnerstack.com`), in ≤32-day chunks (Cloudflare caps query span
+     at 4w4d and retention at 12w6d).
+   - If this step fails entirely, continue without it — the crawl section is
+     simply omitted from the page.
+
 5. **Merge:**
-   `node make-data.js <aiTrafficFile> <totalTrafficFile> <mqlContactsFile> <mqlMonthlyFile>`
+   `node make-data.js <aiTrafficFile> <totalTrafficFile> <mqlContactsFile> <mqlMonthlyFile> crawl-raw.json`
    (in this directory) → writes `data.json`.
 
 6. **Render:** `node render.js` → writes `index.html` + `artifact.html`
@@ -75,6 +89,15 @@ scratch JSON file yourself (raw `[...]` rows or the whole `{result: [...]}` obje
 - **MQL** = `salesforce::lead` with `mql_date` set, `lead_source = Inbound`, status not Holding
   (matches GTM Daily Pulse).
 - **AI-attributed MQL** = regex match over `sub_source | utm_source | utm_medium | form_name`.
+- **AI Crawl Control section** = Cloudflare GraphQL `httpRequestsAdaptiveGroups`,
+  zone `partnerstack.com`, verified bot categories `AI Crawler / AI Assistant / AI Search`
+  only (search-engine crawlers excluded), `requestSource = eyeball`. UA → crawler/operator
+  mapping lives in `CRAWLER_MAP` in `make-data.js`; generic UAs Cloudflare verified by
+  other signals roll up to "Other verified AI bots". Edge retention is ~90 days, so the
+  section clamps 12m views and the crawl→visit→MQL funnel always uses the intersection
+  of the selected period and crawl coverage.
+- **Cloudflare "referrals" caveat:** Cloudflare's AI-referrals view counts Google Search
+  among referrers — deliberately NOT used for the GA4 referral funnel. Crawl section only.
 - **HISTORICAL_AI_BACKFILL** (in `make-data.js`): AI MQLs inside the window but older than
   the rolling 5000-row contact pull. Currently empty; if the contact window ever shrinks
   below 365 days, re-run the step-3 query with an extra filter

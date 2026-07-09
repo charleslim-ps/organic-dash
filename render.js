@@ -110,6 +110,10 @@ function buildPayload(data) {
     allInbound,
     contactMin,
     nonAiMin,
+    // Cloudflare AI crawler requests: [date, crawler, operator, category, count]
+    crawl: data.crawlDaily || [],
+    crawlStart: data.crawlStart || '',
+    crawlEnd: data.crawlEnd || '',
   };
 }
 
@@ -180,6 +184,16 @@ const STYLE = `
     .od-wrap .loadall:hover { background: color-mix(in srgb, var(--od-accent) 20%, var(--od-surface2)); }
     .od-wrap .loadall:focus-visible { outline: 2px solid var(--od-accent); outline-offset: 2px; }
     .od-wrap .note { font-size: 0.75rem; color: var(--od-faint); margin-top: 0.6rem; }
+    .od-wrap .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; margin-bottom: 1rem; font-size: 0.75rem; color: var(--od-muted); }
+    .od-wrap .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.35rem; vertical-align: baseline; }
+    .od-wrap .bar.stacked { flex-direction: column-reverse; }
+    .od-wrap .bar.stacked > b { display: block; width: 100%; }
+    .od-wrap .bar.stacked > b:last-child { border-radius: 3px 3px 0 0; }
+    .od-wrap .funnel { display: flex; flex-direction: column; gap: 0; }
+    .od-wrap .funnel .stage { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.85rem 0; }
+    .od-wrap .funnel .stage .name { color: var(--od-muted); font-size: 0.8rem; }
+    .od-wrap .funnel .stage .val { font-size: 1.6rem; font-weight: 600; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; }
+    .od-wrap .funnel .conv { font-size: 0.75rem; color: var(--od-accent); padding: 0.15rem 0 0.15rem 0.9rem; border-left: 2px solid var(--od-border); margin-left: 0.25rem; font-variant-numeric: tabular-nums; }
     .od-wrap .method { font-size: 0.8rem; color: var(--od-muted); }
     .od-wrap .method code { background: var(--od-surface2); border-radius: 0.25rem; padding: 0.05rem 0.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; }
     .od-wrap footer { margin-top: 2rem; color: var(--od-faint); font-size: 0.75rem; }
@@ -217,6 +231,31 @@ const MARKUP = `
       <div class="xlabels" id="xlabels"></div>
     </div>
 
+    <div id="crawl-section" style="display:none">
+      <div class="card">
+        <h2 id="crawl-title">AI Crawl Control — crawler requests by day</h2>
+        <div class="legend" id="crawl-legend"></div>
+        <div class="chart" id="crawl-chart"></div>
+        <div class="xlabels" id="crawl-xlabels"></div>
+        <div class="note" id="crawl-note"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <h2 id="crawler-tbl-title">AI crawlers</h2>
+          <div class="tbl-scroll"><table>
+            <thead><tr><th>Crawler</th><th>Operator</th><th>Type</th><th class="num">Requests</th><th class="num">Share</th></tr></thead>
+            <tbody id="crawler-body"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <h2 id="funnel-title">Crawl → visit → MQL</h2>
+          <div class="funnel" id="funnel"></div>
+          <div class="note" id="funnel-note"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid2">
       <div class="card">
         <h2 id="ref-title">AI referrers</h2>
@@ -229,6 +268,10 @@ const MARKUP = `
         MQLs: Looker <code>salesforce::lead</code> — <code>mql_date</code> in period, <code>lead_source = Inbound</code>,
         status excludes Holding (same definition as GTM Daily Pulse). AI attribution = regex over
         <code>sub_source</code>, <code>utm_source</code>, <code>utm_medium</code>, <code>form_name</code>.
+        Crawl: Cloudflare GraphQL <code>httpRequestsAdaptiveGroups</code> on zone <code>partnerstack.com</code>,
+        verified bot categories <code>AI Crawler / AI Assistant / AI Search</code> only (search-engine crawlers
+        excluded; ~90-day edge retention). Cloudflare's "AI referrals" metric is deliberately NOT used for the
+        referral funnel above — it counts Google Search among referrers; visits stay GA4-only.
         Data pulled via Claude MCP connectors; no direct API credentials.</p>
       </div>
     </div>
@@ -379,6 +422,116 @@ const SCRIPT = `
     document.getElementById('mql-note').textContent = note;
 
     document.getElementById('od-footer').textContent = 'Generated ' + D.generatedAt + ' \\u00b7 refreshed daily via Claude scheduled task';
+
+    renderCrawl(co, aiMqls);
+  }
+
+  var OP_COLORS = ['#7b82e8', '#34d399', '#f59e0b', '#f472b6', '#38bdf8', '#c4b5fd', '#6b6a65'];
+
+  function renderCrawl(co, aiMqls) {
+    var C = D.crawl || [];
+    var section = document.getElementById('crawl-section');
+    if (!C.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+
+    // The crawl window is the selected period clamped to Cloudflare coverage.
+    var start = co && co > D.crawlStart ? co : D.crawlStart;
+    var clamped = !co || co < D.crawlStart;
+    var rows = C.filter(function (r) { return r[0] >= start; });
+
+    // --- aggregates: per-operator totals, per-crawler totals, per-day stacks
+    var opTotals = {}, crawlerAgg = {}, total = 0;
+    rows.forEach(function (r) {
+      opTotals[r[2]] = (opTotals[r[2]] || 0) + r[4];
+      var key = r[1];
+      if (!crawlerAgg[key]) crawlerAgg[key] = { op: r[2], cat: r[3], n: 0 };
+      crawlerAgg[key].n += r[4];
+      total += r[4];
+    });
+    var topOps = Object.keys(opTotals).sort(function (a, b) { return opTotals[b] - opTotals[a]; });
+    var shown = topOps.slice(0, OP_COLORS.length - 1);
+    var opColor = {};
+    shown.forEach(function (o, i) { opColor[o] = OP_COLORS[i]; });
+    var OTHER = 'Other';
+    var hasOther = topOps.length > shown.length;
+
+    // --- stacked daily chart
+    var byDay = {};
+    rows.forEach(function (r) {
+      var day = byDay[r[0]] || (byDay[r[0]] = { total: 0, ops: {} });
+      var op = opColor[r[2]] ? r[2] : OTHER;
+      day.ops[op] = (day.ops[op] || 0) + r[4];
+      day.total += r[4];
+    });
+    var keys = Object.keys(byDay).sort();
+    var max = 1;
+    keys.forEach(function (k) { if (byDay[k].total > max) max = byDay[k].total; });
+    var stack = shown.slice();
+    if (hasOther) stack.push(OTHER);
+    var chart = document.getElementById('crawl-chart');
+    var html = '';
+    [0.25, 0.5, 0.75, 1].forEach(function (f) {
+      html += '<div class="gridline" style="bottom:' + f * 100 + '%"><span>' + fmt(Math.round(max * f)) + '</span></div>';
+    });
+    html += '<div class="bars' + (keys.length > 90 ? ' dense' : '') + '">';
+    keys.forEach(function (k, i) {
+      var segs = '';
+      stack.forEach(function (op) {
+        var v = byDay[k].ops[op] || 0;
+        if (!v) return;
+        var h = (v / max) * 100;
+        segs += '<b style="height:' + h.toFixed(2) + '%;background:' + (opColor[op] || OP_COLORS[OP_COLORS.length - 1]) + '"></b>';
+      });
+      html += '<div class="bar stacked" data-i="' + i + '">' + segs + '</div>';
+    });
+    html += '</div>';
+    chart.innerHTML = html;
+    chart.__keys = keys;
+    chart.__byDay = byDay;
+    chart.__stack = stack;
+
+    var xl = document.getElementById('crawl-xlabels');
+    var ticks = [];
+    var n = Math.min(8, keys.length);
+    for (var i = 0; i < n; i++) ticks.push(keys[Math.round((i * (keys.length - 1)) / Math.max(n - 1, 1))]);
+    xl.innerHTML = ticks.map(function (t) { return '<span>' + t.slice(2) + '</span>'; }).join('');
+
+    document.getElementById('crawl-title').textContent =
+      'AI Crawl Control — ' + fmt(total) + ' crawler requests (' + (clamped ? 'since ' + start : 'last ' + state.period + 'd') + ')';
+    document.getElementById('crawl-legend').innerHTML = stack.map(function (op) {
+      var col = opColor[op] || OP_COLORS[OP_COLORS.length - 1];
+      return '<span><span class="dot" style="background:' + col + '"></span>' + esc(op) + '</span>';
+    }).join('');
+    document.getElementById('crawl-note').textContent = clamped
+      ? 'Cloudflare edge retention is ~90 days: crawl data covers ' + D.crawlStart + ' \\u2192 ' + D.crawlEnd + '; longer windows are clamped.'
+      : 'Source: Cloudflare zone partnerstack.com \\u00b7 verified AI bots only (AI Crawler / AI Assistant / AI Search).';
+
+    // --- crawler table (top 14 + rollup)
+    var list = Object.keys(crawlerAgg).map(function (k) { return [k, crawlerAgg[k]]; }).sort(function (a, b) { return b[1].n - a[1].n; });
+    var top = list.slice(0, 14);
+    var restN = list.slice(14).reduce(function (s, e) { return s + e[1].n; }, 0);
+    document.getElementById('crawler-tbl-title').textContent = 'AI crawlers (' + list.length + ')';
+    document.getElementById('crawler-body').innerHTML = top.map(function (e) {
+      return '<tr><td>' + esc(e[0]) + '</td><td>' + esc(e[1].op) + '</td><td class="attr">' + esc(e[1].cat.replace('AI ', '')) +
+        '</td><td class="num">' + fmt(e[1].n) + '</td><td class="num">' + (total ? ((e[1].n / total) * 100).toFixed(1) : '0.0') + '%</td></tr>';
+    }).join('') + (restN ? '<tr><td>' + (list.length - top.length) + ' more\\u2026</td><td></td><td></td><td class="num">' + fmt(restN) +
+      '</td><td class="num">' + ((restN / total) * 100).toFixed(1) + '%</td></tr>' : '');
+
+    // --- crawl -> visit -> MQL funnel, all stages over the same clamped window
+    var aiUsersF = 0;
+    D.ai.forEach(function (r) { if (r[0] >= start && r[0] <= D.crawlEnd) aiUsersF += r[2]; });
+    var aiMqlsF = D.rows.filter(function (r) { return r[5] === 1 && r[0] >= start && r[0] <= D.crawlEnd; }).length;
+    var per1k = total ? (aiUsersF / total) * 1000 : 0;
+    var mqlRate = aiUsersF ? (aiMqlsF / aiUsersF) * 100 : 0;
+    document.getElementById('funnel').innerHTML =
+      '<div class="stage"><span class="name">AI crawler requests (Cloudflare edge)</span><span class="val">' + fmt(total) + '</span></div>' +
+      '<div class="conv">\\u2193 ' + per1k.toFixed(1) + ' AI referral users per 1k crawler requests</div>' +
+      '<div class="stage"><span class="name">AI referral users (GA4)</span><span class="val">' + fmt(aiUsersF) + '</span></div>' +
+      '<div class="conv">\\u2193 ' + mqlRate.toFixed(2) + '% of AI referral users become MQLs</div>' +
+      '<div class="stage"><span class="name">AI-attributed MQLs (Salesforce)</span><span class="val green" style="color:var(--od-green)">' + fmt(aiMqlsF) + '</span></div>';
+    document.getElementById('funnel-note').textContent =
+      'Same ' + (clamped ? D.crawlStart + ' \\u2192 ' + D.crawlEnd : 'last-' + state.period + 'd') +
+      ' window for all three stages. Stages are different units (bot requests \\u2192 human users \\u2192 leads); the ratios are directional, not a strict same-cohort funnel.';
   }
 
   // chart tooltip
@@ -399,6 +552,26 @@ const SCRIPT = `
     tip.style.top = y + 'px';
   });
   chartEl.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+
+  var crawlEl = document.getElementById('crawl-chart');
+  crawlEl.addEventListener('mousemove', function (ev) {
+    var bar = ev.target.closest ? ev.target.closest('.bar') : null;
+    if (!bar) { tip.style.display = 'none'; return; }
+    var k = crawlEl.__keys[Number(bar.getAttribute('data-i'))];
+    var day = crawlEl.__byDay[k];
+    var lines = crawlEl.__stack
+      .filter(function (op) { return day.ops[op]; })
+      .map(function (op) { return esc(op) + ': <b>' + fmt(day.ops[op]) + '</b>'; });
+    tip.innerHTML = k + ' \\u00b7 <b>' + fmt(day.total) + '</b> requests<br>' + lines.join('<br>');
+    tip.style.display = 'block';
+    var wrap = crawlEl.closest('.od-wrap');
+    var wr = wrap.getBoundingClientRect();
+    var x = ev.clientX - wr.left + 14, y = ev.clientY - wr.top - 34;
+    if (x + tip.offsetWidth > wrap.clientWidth) x -= tip.offsetWidth + 24;
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  });
+  crawlEl.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
 
   var btns = document.querySelectorAll('.filters button');
   btns.forEach(function (b) {
