@@ -124,6 +124,16 @@ function addDays(iso, delta) {
   return t.toISOString().slice(0, 10);
 }
 
+// Source-of-truth report links, shown under tile headers so the numbers can be
+// eyeballed against the upstream systems. HubSpot portal 7012252 has the
+// built-in "AI Referrals" traffic bucket; MQLs have no HubSpot equivalent
+// (SFDC via Looker is the MQL source of truth), so those tiles link to the
+// matching Looker explore instead.
+const HS_TRAFFIC_URL = 'https://app.hubspot.com/analytics/7012252/traffic/sources';
+const LOOKER_MQL_URL =
+  'https://reporting.partnerstack.com/explore/salesforce/lead?fields=lead.mql_date_month,lead.count&amp;f[lead.mql_date_date]=13+months&amp;f[lead.status]=-Holding&amp;f[lead.lead_source]=Inbound&amp;sorts=lead.mql_date_month+desc&amp;limit=100';
+const CF_CRAWL_URL = 'https://dash.cloudflare.com/e01cc42974eee44a8e992b8e7df25a19/partnerstack.com/ai-crawl-control';
+
 // Design system lifted from https://ad-vibe-coding.github.io/organic-dash/ —
 // stone neutrals, periwinkle accent, Inter, rounded-2xl bordered cards,
 // uppercase eyebrow labels, mono tabular numerals. Deliberately single-theme
@@ -151,6 +161,9 @@ const STYLE = `
     @media (min-width: 1024px) { .od-wrap .kpis { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); } }
     .od-wrap .kpi { background: var(--od-surface); border: 1px solid var(--od-border); border-radius: 1rem; padding: 1.25rem 1.5rem; }
     .od-wrap .kpi .label { color: var(--od-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; }
+    .od-wrap .vlink { display: block; font-size: 0.65rem; color: var(--od-faint); text-decoration: none; margin-top: 0.25rem; }
+    .od-wrap .vlink:hover { color: var(--od-accent); text-decoration: underline; }
+    .od-wrap .card > .vlink { margin: -0.9rem 0 1.25rem; }
     .od-wrap .kpi .value { font-size: 2.25rem; font-weight: 600; letter-spacing: -0.025em; margin-top: 0.6rem; font-variant-numeric: tabular-nums; }
     .od-wrap .kpi .value.green { color: var(--od-green); }
     .od-wrap .card { background: var(--od-surface); border: 1px solid var(--od-border); border-radius: 1rem; padding: 1.5rem; margin-bottom: 1.5rem; }
@@ -219,11 +232,11 @@ const MARKUP = `
     </div>
 
     <div class="kpis">
-      <div class="kpi"><div class="label">AI referral users</div><div class="value" id="k-ai"></div></div>
-      <div class="kpi"><div class="label">AI-attributed MQLs</div><div class="value green" id="k-mql"></div></div>
-      <div class="kpi"><div class="label">Share of inbound MQLs</div><div class="value" id="k-share"></div></div>
-      <div class="kpi"><div class="label">AI user → MQL rate</div><div class="value" id="k-conv"></div></div>
-      <div class="kpi"><div class="label">All site users</div><div class="value" id="k-tot"></div></div>
+      <div class="kpi"><div class="label">AI referral users</div><a class="vlink" href="${HS_TRAFFIC_URL}" target="_blank" rel="noopener">HS traffic report ↗</a><div class="value" id="k-ai"></div></div>
+      <div class="kpi"><div class="label">AI-attributed MQLs</div><a class="vlink" href="${LOOKER_MQL_URL}" target="_blank" rel="noopener">Looker report ↗</a><div class="value green" id="k-mql"></div></div>
+      <div class="kpi"><div class="label">Share of inbound MQLs</div><a class="vlink" href="${LOOKER_MQL_URL}" target="_blank" rel="noopener">Looker report ↗</a><div class="value" id="k-share"></div></div>
+      <div class="kpi"><div class="label">AI user → MQL rate</div><a class="vlink" href="${LOOKER_MQL_URL}" target="_blank" rel="noopener">Looker report ↗</a><div class="value" id="k-conv"></div></div>
+      <div class="kpi"><div class="label">All site users</div><a class="vlink" href="${HS_TRAFFIC_URL}" target="_blank" rel="noopener">HS traffic report ↗</a><div class="value" id="k-tot"></div></div>
     </div>
 
     <div class="card">
@@ -236,6 +249,7 @@ const MARKUP = `
     <div id="crawl-section" style="display:none">
       <div class="card">
         <h2 id="crawl-title">AI Crawl Control — crawler requests by day</h2>
+        <a class="vlink" href="${CF_CRAWL_URL}" target="_blank" rel="noopener">Cloudflare AI Crawl Control ↗</a>
         <div class="legend" id="crawl-legend"></div>
         <div class="chart" id="crawl-chart"></div>
         <div class="xlabels" id="crawl-xlabels"></div>
